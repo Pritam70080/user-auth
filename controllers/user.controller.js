@@ -1,6 +1,6 @@
 import User from "../models/user.model.js";
 import crypto from "crypto";
-import sendVerificationEmail from "../utils/sendMail.js";
+import {sendVerificationEmail, generateForgotPasswordEmail, generateVerifyEmail }from "../utils/sendMail.js";
 import jwt from "jsonwebtoken";
 
 export const register = async (req, res) => {
@@ -34,8 +34,14 @@ export const register = async (req, res) => {
                 success: false,
             })
         }
-        await sendVerificationEmail(newUser.email, token);
-
+        const mailOptions = generateVerifyEmail(newUser.email, token);
+        const isSent = await sendVerificationEmail(mailOptions);
+        if(!isSent) {
+            return res.status(400).json({
+                message: "Failed to send mail",
+                success: false
+            })
+        }
         res.status(201).json({
             success: true,
             message: "User registered successfully, Now you need to verify your email"
@@ -213,4 +219,132 @@ export const logout = async (req, res) => {
     }
 }
 
+export const resendEmailVerification = async (req, res) => {
+    try {
+        const {email} = req.body;
+        if(!email) {
+            return res.status(400).json({
+                message: "Email is required",
+                success: false
+            })
+        }
+        const user = await User.findOne({email});
+        if(!user) {
+            return res.status(404).json({
+                message: "User not found",
+                success: false
+            })
+        }
+        if(user.isVerified) {
+            return res.status(400).json({
+                message: "User email is already verified",
+                success: false
+            })
+        }
+        const token = await crypto.randomBytes(32).toString("hex");
+        const tokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
+        user.verificationToken = token;
+        user.verificationTokenExpiry = tokenExpiry;
+        await user.save();
+        const mailOptions = generateVerifyEmail(email, token);
+        const mail = await sendVerificationEmail(mailOptions);
+        if(!mail) {
+            return res.status(400).json({
+                message: "Mail couldn't sent",
+                success: false
+            })
+        }
+        return res.status(200).json({
+            message: "Verification email send successfully",
+            success: true
+        })
+    } catch (error) {
+        console.error("Error sending verification email:", error);
+        return res.status(500).json({
+            message: "Internal server error",
+            success: false
+        })
+    }
+}
 
+export const forgotPassword = async (req, res) => {
+    try {
+        const {email} = req.body;
+        if(!email) {
+            return res.status(400).json({
+                message: "Email is required",
+                success: false
+            })
+        }
+        const user = await User.findOne({email});
+        if(!user) {
+            return res.status(400).json({
+                message: "User not found",
+                success: false
+            })
+        }
+        const token = await crypto.randomBytes(32).toString("hex");
+        const tokenExpiry = Date.now() + 5 * 60 * 1000;
+        user.resetPasswordToken = token;
+        user.resetPasswordTokenExpiry = tokenExpiry;
+        await user.save();
+        const mailOptions = generateForgotPasswordEmail(email, token);
+        const isSent = await sendVerificationEmail(mailOptions);
+        if(!isSent) {
+            return res.status(400).json({
+                message: "Failed to send mail",
+                success: false
+            })
+        }
+        return res.status(200).json({
+            message: "Reset password initiated",
+            success: true
+        })
+    } catch (error) {
+        console.error("Error handling forgot password", error);
+        return res.status(500).json({
+            message: "Internal server error",
+            success: false
+        })
+    }
+}
+
+export const resetPassword = async (req, res) => {
+    try {
+        const {token} = req.params;
+        const {password} = req.body;
+        if(!password) {
+            return res.status(400).json({
+                message: "Password is required",
+                success: false
+            })
+        }
+        if(password.length < 6) {
+            return res.status(400).json({
+                message: "Password must be of 6 characters",
+                success: false
+            })
+        }
+        const user = await User.findOne({resetPasswordToken: token, resetPasswordTokenExpiry: {$gt: Date.now()}});
+        if(!user) {
+            return res.status(400).json({
+                message: "Invalid token or Session expired",
+                success: false
+            })
+        }
+        user.password = password;
+        user.resetPasswordToken = null;
+        user.resetPasswordTokenExpiry = null;
+        await user.save();
+        return res.status(200).json({
+            message: "Password updated successfully",
+            success: true
+        })
+    } catch (error) {
+        console.error("Error updating the password", error);
+        return res.status(500).json({
+            message: "Internal server error",
+            success: false
+        })
+    }
+}

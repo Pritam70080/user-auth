@@ -14,7 +14,7 @@ app.use(express.json());
 app.use(urlencoded({extended :true}));
 app.use(cors({
     origin: process.env.BASE_URL,
-    methods: ["GET", "POST", "UPDATE", "DELETE", "PUT"],
+    methods: ["GET", "POST", "PUT", "DELETE", "PUT"],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
