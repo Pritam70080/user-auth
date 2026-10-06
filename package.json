@@ -4,8 +4,9 @@
   "description": "Backend Authentication",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon index.js",
-    "start": "node index.js"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch index.ts"
   },
   "keywords": [],
   "author": "",
@@ -22,6 +23,13 @@
     "nodemailer": "^7.0.12"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.6.4",
+    "@types/nodemailer": "^8.0.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   }
 }
