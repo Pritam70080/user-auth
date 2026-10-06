@@ -1,256 +1,157 @@
 import crypto from "crypto";
-import jwt, { type SignOptions } from "jsonwebtoken";
 import type { Request, Response } from "express";
+import type { ParamsDictionary } from "express-serve-static-core";
 import User from "../models/user.model.js";
 import {
   generateForgotPasswordEmail,
   generateVerifyEmail,
   sendVerificationEmail,
 } from "../utils/sendMail.js";
-import type { AuthenticatedRequest } from "../types/auth.js";
-import type { UserRole } from "../types/user.js";
+import { ApiError } from "../types/apiError.js";
+import { ApiResponse } from "../types/apiResponse.js";
+import {
+  type CreateUserInput,
+  type EmailInput,
+  type LoginInput,
+  type ResetPasswordInput,
+} from "../schemas/auth.schema.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
+import type { AuthenticatedRequest } from "../types/auth.js";
 
 const createTokenExpiry = (hours: number) => new Date(Date.now() + hours * 60 * 60 * 1000);
 
-
-export const register = async (req: Request, res: Response) => {
-  const { name, email, password } = req.body as { name?: string; email?: string; password?: string };
-
-  if (!name || !email || !password) {
-    return res.status(400).json({
-      message: "All fields are required.",
-      success: false,
-    });
-  }
-
-  if (password.length < 6) {
-    return res.status(400).json({
-      message: "Password must be at least 6 characters.",
-      success: false,
-    });
-  }
-
-  try {
-    const existingUser = await User.findOne({ email: email.toLowerCase() });
+export const register = asyncHandler<ParamsDictionary, unknown, CreateUserInput>(
+  async (req, res) => {
+    const { name, email, password } = req.body;
+    const normalizedEmail = email.toLowerCase();
+    const existingUser = await User.findOne({ email: normalizedEmail });
 
     if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: "User already exists.",
-      });
+      throw new ApiError("User already exists.", 409);
     }
 
     const token = crypto.randomBytes(32).toString("hex");
-    const tokenExpiry = createTokenExpiry(24);
     const newUser = await User.create({
       name,
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       password,
       verificationToken: token,
-      verificationTokenExpiry: tokenExpiry,
+      verificationTokenExpiry: createTokenExpiry(24),
     });
-
-    if (!newUser) {
-      return res.status(404).json({
-        message: "Failed to register user.",
-        success: false,
-      });
-    }
 
     const mailOptions = generateVerifyEmail(newUser.email, token);
     const isSent = await sendVerificationEmail(mailOptions);
 
     if (!isSent) {
-      return res.status(400).json({
-        message: "Failed to send mail",
-        success: false,
-      });
+      throw new ApiError("Failed to send verification email.", 502);
     }
 
-    return res.status(201).json({
-      success: true,
-      message: "User registered successfully. Please verify your email.",
-    });
-  } catch (error) {
-    console.error("Error Registering user: ", error);
-    return res.status(500).json({
-      error: "Internal server error",
-      success: false,
-    });
-  }
-};
+    res
+      .status(201)
+      .json(new ApiResponse("User registered successfully. Please verify your email.", null, 201));
+  },
+);
 
-export const verify = async (req: Request, res: Response) => {
+export const verify = asyncHandler<{ token: string }>(async (req, res) => {
   const { token } = req.params;
+  const user = await User.findOne({
+    verificationToken: token,
+    verificationTokenExpiry: { $gt: Date.now() },
+  });
 
-  if (!token) {
-    return res.status(400).json({
-      success: false,
-      message: "token is required!",
-    });
+  if (!user) {
+    throw new ApiError("User not found.", 404);
   }
 
-  try {
-    const user = await User.findOne({
-      verificationToken: token,
-      verificationTokenExpiry: { $gt: Date.now() },
-    });
+  user.isVerified = true;
+  user.verificationToken = null;
+  user.verificationTokenExpiry = null;
+  await user.save();
 
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found.",
-        success: false,
-      });
-    }
+  req.user = { id: user._id.toString(), role: user.role };
 
-    user.isVerified = true;
-    user.verificationToken = null;
-    user.verificationTokenExpiry = null;
-    await user.save();
+  res.status(200).json(
+    new ApiResponse("User verified successfully.", {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    }),
+  );
+});
 
-    req.user = { id: user._id.toString(), role: user.role };
+export const login = asyncHandler<ParamsDictionary, unknown, LoginInput>(async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ email: email.toLowerCase() });
 
-    return res.status(200).json({
-      message: "User verified successfully",
-      success: true,
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      }
-    });
-  } catch (error) {
-    console.error("Error verifying user: ", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to verify user",
-    });
-  }
-};
-
-export const login = async (req: Request, res: Response) => {
-  const { email, password } = req.body as { email?: string; password?: string };
-
-  if (!email || !password) {
-    return res.status(400).json({
-      success: false,
-      message: "All fields are required",
-    });
+  if (!user) {
+    throw new ApiError("User not found. Please register first.", 404);
   }
 
-  try {
-    const user = await User.findOne({ email: email.toLowerCase() });
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found, Please register first",
-      });
-    }
-
-    if (!user.isVerified) {
-      return res.status(401).json({
-        success: false,
-        message: "User account is not verified",
-      });
-    }
-
-    const isPasswordMatched = await user.comparePassword(password);
-    if (!isPasswordMatched) {
-      return res.status(401).json({
-        success: false,
-        message: "Incorrect email or password",
-      });
-    }
-
-    const accessToken = generateAccessToken({id: user._id.toString(), role: user.role});
-    const refreshToken = generateRefreshToken({id: user._id.toString(), role: user.role});
-
-    user.refreshToken = refreshToken;
-    await user.save();
-
-    res.cookie("accessToken", accessToken, {
-      httpOnly: true,
-      sameSite: "none",
-      secure: true,
-      maxAge: 15 * 60 * 1000,
-    });
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      sameSite: "none",
-      secure: true,
-      maxAge: 24 * 60 * 60 * 1000,
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "User logged in successfully",
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      }
-    });
-  } catch (error) {
-    console.error("Error logging in user: ", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to login user",
-    });
+  if (!user.isVerified) {
+    throw new ApiError("User account is not verified.", 401);
   }
-};
 
-export const getProfile = async (req: AuthenticatedRequest, res: Response) => {
-  try {
+  const isPasswordMatched = await user.comparePassword(password);
+  if (!isPasswordMatched) {
+    throw new ApiError("Incorrect email or password.", 401);
+  }
+
+  const accessToken = generateAccessToken({ id: user._id.toString(), role: user.role });
+  const refreshToken = generateRefreshToken({ id: user._id.toString(), role: user.role });
+
+  user.refreshToken = refreshToken;
+  await user.save();
+
+  res.cookie("accessToken", accessToken, {
+    httpOnly: true,
+    sameSite: "none",
+    secure: true,
+    maxAge: 15 * 60 * 1000,
+  });
+  res.cookie("refreshToken", refreshToken, {
+    httpOnly: true,
+    sameSite: "none",
+    secure: true,
+    maxAge: 24 * 60 * 60 * 1000,
+  });
+
+  res.status(200).json(
+    new ApiResponse("User logged in successfully.", {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    }),
+  );
+});
+
+export const getProfile = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user?.id;
-
     if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized access",
-      });
+      throw new ApiError("Unauthorized access.", 401);
     }
 
     const user = await User.findById(userId).select("-password");
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "Invalid token",
-      });
+      throw new ApiError("Invalid token.", 404);
     }
 
-    return res.status(200).json({
-      success: true,
-      message: "User profile accessed",
-      user,
-    });
-  } catch (error) {
-    console.error("Error getting user profile: ", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to get user profile",
-    });
-  }
-};
+    res.status(200).json(new ApiResponse("User profile accessed.", user));
+  },
+);
 
-export const logout = async (req: AuthenticatedRequest, res: Response) => {
-  try {
+export const logout = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
     if (!req.user) {
-      return res.status(401).json({
-        message: "Unauthorized access",
-        success: false,
-      });
+      throw new ApiError("Unauthorized access.", 401);
     }
 
     const user = await User.findById(req.user.id);
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+      throw new ApiError("User not found.", 404);
     }
 
     user.refreshToken = null;
@@ -258,165 +159,82 @@ export const logout = async (req: AuthenticatedRequest, res: Response) => {
     res.clearCookie("accessToken");
     res.clearCookie("refreshToken");
 
-    return res.status(200).json({
-      success: true,
-      message: "User logged out successfully",
-    });
-  } catch (error) {
-    console.error("Error logging out: ", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to logout",
-    });
-  }
-};
+    res.status(200).json(new ApiResponse("User logged out successfully."));
+  },
+);
 
-export const resendEmailVerification = async (req: Request, res: Response) => {
-  try {
-    const { email } = req.body as { email?: string };
-
-    if (!email) {
-      return res.status(400).json({
-        message: "Email is required",
-        success: false,
-      });
-    }
-
+export const resendEmailVerification = asyncHandler<ParamsDictionary, unknown, EmailInput>(
+  async (req, res) => {
+    const { email } = req.body;
     const user = await User.findOne({ email: email.toLowerCase() });
+
     if (!user) {
-      return res.status(404).json({
-        message: "User not found",
-        success: false,
-      });
+      throw new ApiError("User not found.", 404);
     }
 
     if (user.isVerified) {
-      return res.status(400).json({
-        message: "User email is already verified",
-        success: false,
-      });
+      throw new ApiError("User email is already verified.", 400);
     }
 
     const token = crypto.randomBytes(32).toString("hex");
-    const tokenExpiry = createTokenExpiry(24);
     user.verificationToken = token;
-    user.verificationTokenExpiry = tokenExpiry;
+    user.verificationTokenExpiry = createTokenExpiry(24);
     await user.save();
 
-    const mailOptions = generateVerifyEmail(email, token);
-    const mail = await sendVerificationEmail(mailOptions);
-    if (!mail) {
-      return res.status(400).json({
-        message: "Mail couldn't be sent",
-        success: false,
-      });
-    }
-
-    return res.status(200).json({
-      message: "Verification email sent successfully",
-      success: true,
-    });
-  } catch (error) {
-    console.error("Error sending verification email:", error);
-    return res.status(500).json({
-      message: "Internal server error",
-      success: false,
-    });
-  }
-};
-
-export const forgotPassword = async (req: Request, res: Response) => {
-  try {
-    const { email } = req.body as { email?: string };
-
-    if (!email) {
-      return res.status(400).json({
-        message: "Email is required",
-        success: false,
-      });
-    }
-
-    const user = await User.findOne({ email: email.toLowerCase() });
-    if (!user) {
-      return res.status(400).json({
-        message: "User not found",
-        success: false,
-      });
-    }
-
-    const token = crypto.randomBytes(32).toString("hex");
-    const tokenExpiry = createTokenExpiry(1 / 12);
-    user.resetPasswordToken = token;
-    user.resetPasswordTokenExpiry = tokenExpiry;
-    await user.save();
-
-    const mailOptions = generateForgotPasswordEmail(email, token);
+    const mailOptions = generateVerifyEmail(user.email, token);
     const isSent = await sendVerificationEmail(mailOptions);
     if (!isSent) {
-      return res.status(400).json({
-        message: "Failed to send mail",
-        success: false,
-      });
+      throw new ApiError("Failed to send verification email.", 502);
     }
 
-    return res.status(200).json({
-      message: "Reset password initiated",
-      success: true,
-    });
-  } catch (error) {
-    console.error("Error handling forgot password", error);
-    return res.status(500).json({
-      message: "Internal server error",
-      success: false,
-    });
-  }
-};
+    res.status(200).json(new ApiResponse("Verification email sent successfully."));
+  },
+);
 
-export const resetPassword = async (req: Request, res: Response) => {
-  try {
-    const { token } = req.params;
-    const { password } = req.body as { password?: string };
-
-    if (!password) {
-      return res.status(400).json({
-        message: "Password is required",
-        success: false,
-      });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        message: "Password must be at least 6 characters",
-        success: false,
-      });
-    }
-
-    const user = await User.findOne({
-      resetPasswordToken: token,
-      resetPasswordTokenExpiry: { $gt: Date.now() },
-    } as Record<string, unknown>);
+export const forgotPassword = asyncHandler<ParamsDictionary, unknown, EmailInput>(
+  async (req, res) => {
+    const { email } = req.body;
+    const user = await User.findOne({ email: email.toLowerCase() });
 
     if (!user) {
-      return res.status(400).json({
-        message: "Invalid token or session expired",
-        success: false,
-      });
+      throw new ApiError("User not found.", 400);
     }
 
-    user.password = password;
-    user.resetPasswordToken = null;
-    user.resetPasswordTokenExpiry = null;
+    const token = crypto.randomBytes(32).toString("hex");
+    user.resetPasswordToken = token;
+    user.resetPasswordTokenExpiry = createTokenExpiry(1 / 12);
     await user.save();
 
-    return res.status(200).json({
-      message: "Password updated successfully",
-      success: true,
-    });
-  } catch (error) {
-    console.error("Error updating the password", error);
-    return res.status(500).json({
-      message: "Internal server error",
-      success: false,
-    });
+    const mailOptions = generateForgotPasswordEmail(user.email, token);
+    const isSent = await sendVerificationEmail(mailOptions);
+    if (!isSent) {
+      throw new ApiError("Failed to send password reset email.", 502);
+    }
+
+    res.status(200).json(new ApiResponse("Reset password initiated."));
+  },
+);
+
+export const resetPassword = asyncHandler<
+  { token: string },
+  unknown,
+  ResetPasswordInput
+>(async (req: Request<{ token: string }, unknown, ResetPasswordInput>, res: Response) => {
+  const { token } = req.params;
+  const { password } = req.body;
+  const user = await User.findOne({
+    resetPasswordToken: token,
+    resetPasswordTokenExpiry: { $gt: Date.now() },
+  });
+
+  if (!user) {
+    throw new ApiError("Invalid token or session expired.", 400);
   }
-};
+
+  user.password = password;
+  user.resetPasswordToken = null;
+  user.resetPasswordTokenExpiry = null;
+  await user.save();
+
+  res.status(200).json(new ApiResponse("Password updated successfully."));
+});

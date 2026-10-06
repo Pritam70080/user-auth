@@ -5,6 +5,8 @@ import cookieParser from "cookie-parser";
 
 import db from "./utils/db.js";
 import authRouter from "./routes/auth.route.js";
+import { errorHandler } from "./middlewares/error.middleware.js";
+import { ApiResponse } from "./types/apiResponse.js";
 
 dotenv.config();
 
@@ -27,6 +29,10 @@ app.get("/", (req: Request, res: Response) => {
 });
 
 app.use("/api/v1/auth", authRouter);
+app.use((req: Request, res: Response) => {
+  res.status(404).json(new ApiResponse("Route not found.", null, 404));
+});
+app.use(errorHandler);
 
 const PORT = Number(process.env.PORT ?? 8000);
 
