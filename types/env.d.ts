@@ -1,6 +1,7 @@
 declare namespace NodeJS {
   interface ProcessEnv {
     BASE_URL?: string;
+    FRONTEND_URL?: string;
     PORT?: string;
     MONGODB_URI?: string;
     ACCESSTOKEN_SECRET?: string;

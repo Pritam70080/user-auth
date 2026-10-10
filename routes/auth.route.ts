@@ -4,12 +4,13 @@ import {
   getProfile,
   login,
   logout,
+  refresh,
   register,
   resendEmailVerification,
   resetPassword,
   verify,
 } from "../controllers/auth.controller.js";
-import { verifyToken } from "../middlewares/user.middleware.js";
+import { verifyToken } from "../middlewares/auth.middleware.js";
 import {
   createUserSchema,
   emailSchema,
@@ -23,6 +24,7 @@ const authRouter = Router();
 authRouter.post("/register", validateBody(createUserSchema), register);
 authRouter.get("/verify/:token", verify);
 authRouter.post("/login", validateBody(loginSchema), login);
+authRouter.post("/refresh", refresh);
 authRouter.get("/profile", verifyToken, getProfile);
 authRouter.get("/logout", verifyToken, logout);
 authRouter.post("/resend-verify-email", validateBody(emailSchema), resendEmailVerification);

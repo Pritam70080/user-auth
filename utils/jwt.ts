@@ -19,3 +19,11 @@ export function verifyAccessToken(token: string): AuthTokenPayload {
 export function verifyRefreshToken(token: string): AuthTokenPayload {
     return jwt.verify(token, process.env.REFRESHTOKEN_SECRET ?? "") as AuthTokenPayload;
 }
+
+export function getTokenMaxAge(token: string): number {
+    const payload = jwt.decode(token);
+    if (!payload || typeof payload === "string" || typeof payload.exp !== "number") {
+        throw new Error("Generated token is missing an expiration.");
+    }
+    return Math.max(payload.exp * 1000 - Date.now(), 0);
+}

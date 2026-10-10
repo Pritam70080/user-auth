@@ -16,7 +16,7 @@ app.use(express.json());
 app.use(urlencoded({ extended: true }));
 app.use(
   cors({
-    origin: process.env.BASE_URL ?? "http://localhost:3000",
+    origin: process.env.FRONTEND_URL ?? "http://localhost:5173",
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization"],

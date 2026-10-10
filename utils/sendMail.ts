@@ -1,5 +1,7 @@
 import nodemailer, { type SendMailOptions } from "nodemailer";
 
+const getFrontendUrl = () => (process.env.FRONTEND_URL ?? "http://localhost:5173").replace(/\/$/, "");
+
 const mailTransport = nodemailer.createTransport({
   host: process.env.MAILTRAP_SMTP_HOST ?? "smtp.mailtrap.io",
   port: Number(process.env.MAILTRAP_SMTP_PORT ?? "587"),
@@ -22,7 +24,7 @@ export const sendVerificationEmail = async (options: SendMailOptions): Promise<b
 };
 
 export const generateVerifyEmail = (email: string, token: string): SendMailOptions => {
-  const verificationUrl = `${process.env.BASE_URL}/api/v1/users/verify/${token}`;
+  const verificationUrl = `${getFrontendUrl()}/verify/${token}`;
 
   return {
     from: '"Authentication App" <test@gmail.com>',
@@ -49,7 +51,7 @@ export const generateVerifyEmail = (email: string, token: string): SendMailOptio
 };
 
 export const generateForgotPasswordEmail = (email: string, token: string): SendMailOptions => {
-  const verificationUrl = `${process.env.BASE_URL}/api/v1/users/forgot-password/${token}`;
+  const verificationUrl = `${getFrontendUrl()}/reset-password/${token}`;
 
   return {
     from: '"Authentication App" <test@gmail.com>',

@@ -16,8 +16,9 @@ import {
   type ResetPasswordInput,
 } from "../schemas/auth.schema.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
-import type { AuthenticatedRequest } from "../types/auth.js";
+import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from "../utils/jwt.js";
+import { clearAuthCookies, setAuthCookies } from "../utils/authCookies.js";
+import type { AuthenticatedRequest, AuthTokenPayload } from "../types/auth.js";
 
 const createTokenExpiry = (hours: number) => new Date(Date.now() + hours * 60 * 60 * 1000);
 
@@ -104,18 +105,7 @@ export const login = asyncHandler<ParamsDictionary, unknown, LoginInput>(async (
   user.refreshToken = refreshToken;
   await user.save();
 
-  res.cookie("accessToken", accessToken, {
-    httpOnly: true,
-    sameSite: "none",
-    secure: true,
-    maxAge: 15 * 60 * 1000,
-  });
-  res.cookie("refreshToken", refreshToken, {
-    httpOnly: true,
-    sameSite: "none",
-    secure: true,
-    maxAge: 24 * 60 * 60 * 1000,
-  });
+  setAuthCookies(res, accessToken, refreshToken);
 
   res.status(200).json(
     new ApiResponse("User logged in successfully.", {
@@ -125,6 +115,33 @@ export const login = asyncHandler<ParamsDictionary, unknown, LoginInput>(async (
       role: user.role,
     }),
   );
+});
+
+export const refresh = asyncHandler(async (req, res) => {
+  const refreshToken = req.cookies?.refreshToken as string | undefined;
+  if (!refreshToken) {
+    throw new ApiError("Refresh token is required.", 401);
+  }
+
+  let decodedRefreshToken: AuthTokenPayload;
+  try {
+    decodedRefreshToken = verifyRefreshToken(refreshToken);
+  } catch {
+    throw new ApiError("Invalid or expired refresh token.", 401);
+  }
+
+  const user = await User.findById(decodedRefreshToken.id);
+  if (!user || user.refreshToken !== refreshToken) {
+    throw new ApiError("Invalid or expired refresh token.", 401);
+  }
+
+  const newAccessToken = generateAccessToken({ id: user._id.toString(), role: user.role });
+  const newRefreshToken = generateRefreshToken({ id: user._id.toString(), role: user.role });
+  user.refreshToken = newRefreshToken;
+  await user.save();
+
+  setAuthCookies(res, newAccessToken, newRefreshToken);
+  res.status(200).json(new ApiResponse("Tokens refreshed successfully."));
 });
 
 export const getProfile = asyncHandler(
@@ -139,7 +156,12 @@ export const getProfile = asyncHandler(
       throw new ApiError("Invalid token.", 404);
     }
 
-    res.status(200).json(new ApiResponse("User profile accessed.", user));
+    res.status(200).json(new ApiResponse("User profile accessed.", {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    } ));
   },
 );
 
@@ -153,11 +175,9 @@ export const logout = asyncHandler(
     if (!user) {
       throw new ApiError("User not found.", 404);
     }
-
     user.refreshToken = null;
     await user.save();
-    res.clearCookie("accessToken");
-    res.clearCookie("refreshToken");
+    clearAuthCookies(res);
 
     res.status(200).json(new ApiResponse("User logged out successfully."));
   },
